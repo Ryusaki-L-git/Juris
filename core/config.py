@@ -76,6 +76,23 @@ class Settings(BaseSettings):
     # If False or in staging/production, missing auth yields HTTP 401.
     firebase_project_id: str = ""
 
+    # ── Case Token pricing (CENTRAL configuration point) ──────────────────────
+    # The exact product prices for eCourts operations are NOT defined in the
+    # repository or specification.  These values are the single place token
+    # costs are declared.  A value of 0 means "cost not yet agreed" and
+    # charging is skipped rather than inventing a business price.
+    case_token_cost_ecourts_lookup: int = 0
+    case_token_cost_ecourts_refresh: int = 0
+    case_token_cost_monitor_create: int = 0
+
+    # ── Automatic monitoring ─────────────────────────────────────────────────
+    # The scheduler only runs when explicitly enabled, and never runs a tight
+    # polling loop: it wakes on an interval and processes due monitors only.
+    monitoring_enabled: bool = False
+    monitor_interval_minutes: int = 180
+    monitor_max_consecutive_failures: int = 5
+    monitor_batch_size: int = 25
+
     # ── Derived helpers ───────────────────────────────────────────────────────
     @property
     def is_development(self) -> bool:

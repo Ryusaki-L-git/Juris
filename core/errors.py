@@ -14,6 +14,8 @@ class ErrorCode(str, Enum):
     AUTHENTICATION_FAILURE = "authentication_failure"
     AUTHORIZATION_FAILURE = "authorization_failure"
     SUBSCRIPTION_NOT_ELIGIBLE = "subscription_not_eligible"
+    INSUFFICIENT_TOKENS = "insufficient_tokens"
+    TOKEN_OPERATION_CONFLICT = "token_operation_conflict"
     NOT_FOUND = "not_found"
     INVALID_INPUT = "invalid_input"
     INVALID_CNR = "invalid_cnr"
@@ -78,6 +80,25 @@ class SubscriptionNotEligible(JurisError):
             ErrorCode.SUBSCRIPTION_NOT_ELIGIBLE,
             message,
             http_status=403,
+        )
+
+
+class InsufficientTokens(JurisError):
+    def __init__(self, required: int, available: int) -> None:
+        super().__init__(
+            ErrorCode.INSUFFICIENT_TOKENS,
+            "The current token balance is insufficient for this operation.",
+            http_status=403,
+            details={"required": required, "available": available},
+        )
+
+
+class TokenOperationConflict(JurisError):
+    def __init__(self) -> None:
+        super().__init__(
+            ErrorCode.TOKEN_OPERATION_CONFLICT,
+            "This operation reference was already used with different token details.",
+            http_status=409,
         )
 
 

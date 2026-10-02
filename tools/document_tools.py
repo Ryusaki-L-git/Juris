@@ -1,29 +1,18 @@
 """
 tools/document_tools.py — JURIS Document Tools.
 
-Provides access to LED case documents.
-
-LOCAL-FIRST ARCHITECTURE:
-    Heavy documents primarily reside on the user's device (LED local storage).
-    JURIS does NOT pull full document content from Firestore or cloud storage
-    by default.  Instead:
-
-    1. LED sends a structured summary / ItemRef of the document in context.
-    2. JURIS works from the summary or metadata.
-    3. Full document content is fetched ONLY when the user explicitly
-       selects a document for analysis AND the document is accessible
-       (cloud-synced copy or user has shared it with JURIS).
-
-    This means get_document_content is a privileged, explicit action —
-    not a routine lookup.
-
-Phase 2: Interface + schema only.
-Phase 4: execute() resolves document references from LED context.
+LOCAL-FIRST ARCHITECTURE
+    LED keeps heavy documents on the user's device. The cloud representation
+    stores document METADATA only. JURIS therefore returns metadata freely
+    (within an authorized Case) but reports content as unavailable unless the
+    existing architecture actually exposes it. JURIS never fabricates or
+    fetches content from an unapproved store.
 """
 
 from __future__ import annotations
 
-from core.permissions import ResourceType, Action
+from core.errors import JurisError
+from core.permissions import Action, ResourceType
 from tools.base import (
     JurisTool,
     ToolDefinition,
@@ -34,16 +23,16 @@ from tools.base import (
 
 
 class GetCaseDocumentsTool(JurisTool):
-    """List documents associated with a case (metadata only)."""
+    """List documents associated with an authorized case (metadata only)."""
 
     @property
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="get_case_documents",
             description=(
-                "List documents associated with a LED case. "
-                "Returns document metadata (name, type, date, size) only. "
-                "Does NOT return document content — use get_document_content for that."
+                "List documents attached to a LED case. "
+                "Returns document metadata (name, type, size) only. "
+                "Does NOT return document content."
             ),
             parameters=[
                 ToolParameter(
@@ -54,7 +43,7 @@ class GetCaseDocumentsTool(JurisTool):
                 ),
                 ToolParameter(
                     name="doc_type",
-                    description="Filter by document type (petition, order, affidavit, etc.).",
+                    description="Optional document type filter.",
                     required=False,
                     type_hint="string",
                 ),
@@ -64,23 +53,49 @@ class GetCaseDocumentsTool(JurisTool):
         )
 
     async def execute(self, invocation: ToolInvocation) -> ToolResult:
-        return self.error_result(
-            "Document listing is not yet connected. (Phase 4)"
+        access = invocation.access
+        if access is None:
+            return self.error_result("No authorized LED access is available.")
+        arguments = invocation.arguments
+        case_id = str(arguments.get("case_id") or "").strip()
+        if not case_id:
+            return self.error_result("A case_id is required.")
+        try:
+            documents = await access.list_documents(case_id)
+        except JurisError as error:
+            return self.error_result(error.message)
+        except Exception:
+            return self.error_result("Documents could not be listed.")
+
+        doc_type = str(arguments.get("doc_type") or "").strip().lower()
+        if doc_type:
+            documents = [
+                document
+                for document in documents
+                if document.type.strip().lower() == doc_type
+            ]
+        payload = [
+            {
+                "name": document.name,
+                "type": document.type,
+                "size": document.size,
+                "content_available": document.content_available,
+            }
+            for document in documents
+        ]
+        return ToolResult(
+            tool_name=self.definition.name,
+            success=True,
+            data={"documents": payload, "count": len(payload)},
         )
 
 
 class GetDocumentContentTool(JurisTool):
     """
-    Retrieve the content of a specific document for JURIS analysis.
+    Retrieve document content for analysis, where the architecture allows it.
 
-    This is a privileged action — the document must be:
-      - cloud-synced OR explicitly shared with JURIS
-      - within an authorized case
-      - within the user's document permissions
-
-    JURIS must NOT request document content speculatively.
-    The model should only request this tool when the user explicitly
-    asks JURIS to analyse a document.
+    LED stores documents on-device, so this returns an explicit
+    "content unavailable" result rather than inventing content.
     """
 
     @property
@@ -88,31 +103,55 @@ class GetDocumentContentTool(JurisTool):
         return ToolDefinition(
             name="get_document_content",
             description=(
-                "Retrieve the text content of a specific LED document for analysis. "
-                "Use ONLY when the user explicitly asks JURIS to read or analyse a document. "
-                "Do NOT call this speculatively. "
-                "The document must be in the current case context."
+                "Retrieve the text content of a specific LED document for "
+                "analysis. Use ONLY when the user explicitly asks JURIS to "
+                "read or analyse a document. If LED has not shared a synced "
+                "copy, JURIS reports the content as unavailable."
             ),
             parameters=[
                 ToolParameter(
                     name="document_id",
-                    description="The LED document identifier.",
+                    description="The document name/identifier.",
                     required=True,
                     type_hint="string",
                 ),
                 ToolParameter(
                     name="case_id",
-                    description="The case the document belongs to (required for permission check).",
+                    description="The case the document belongs to.",
                     required=True,
                     type_hint="string",
                 ),
             ],
             resource_type=ResourceType.DOCUMENT,
             action=Action.READ,
-            is_write=False,
         )
 
     async def execute(self, invocation: ToolInvocation) -> ToolResult:
-        return self.error_result(
-            "Document content access is not yet connected. (Phase 4)"
+        access = invocation.access
+        if access is None:
+            return self.error_result("No authorized LED access is available.")
+        arguments = invocation.arguments
+        case_id = str(arguments.get("case_id") or "").strip()
+        document_id = str(arguments.get("document_id") or "").strip()
+        if not case_id or not document_id:
+            return self.error_result("A case_id and document_id are required.")
+        try:
+            content = await access.get_document_content(case_id, document_id)
+        except JurisError as error:
+            return self.error_result(error.message)
+        except Exception:
+            return self.error_result("The document could not be retrieved.")
+
+        return ToolResult(
+            tool_name=self.definition.name,
+            success=True,
+            data={
+                "document_id": content.document_id,
+                "case_id": content.case_id,
+                "name": content.name,
+                "type": content.type,
+                "content": content.content,
+                "content_available": content.content_available,
+                "unavailable_reason": content.unavailable_reason,
+            },
         )

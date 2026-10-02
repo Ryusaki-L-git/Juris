@@ -15,11 +15,8 @@ SECURITY PRINCIPLE:
 from __future__ import annotations
 
 import logging
-import time
 from abc import ABC, abstractmethod
 from typing import Any
-from urllib.request import urlopen
-import json
 
 import jwt
 from jwt import PyJWKClient
@@ -69,7 +66,9 @@ class FirebaseTokenVerifier(TokenVerifier):
       - Audience matches JURIS_FIREBASE_PROJECT_ID.
       - Issuer matches https://securetoken.google.com/<project_id>.
       - Token is not expired.
-      - Maps claims (sub -> user_id, email, name, team_id, subscription).
+            - Maps verified identity claims (sub -> user_id, email, name, team_id).
+                Subscription claims are not entitlement authority; plan access is
+                loaded from the server-owned entitlement store.
     """
 
     def __init__(self, project_id: str | None = None) -> None:
@@ -117,19 +116,12 @@ class FirebaseTokenVerifier(TokenVerifier):
             if not user_id:
                 raise AuthenticationError("Token missing valid subject (user_id).")
 
-            raw_sub = str(payload.get("subscription", "free")).lower()
-            subscription = SubscriptionTier.FREE
-            for tier in SubscriptionTier:
-                if tier.value == raw_sub:
-                    subscription = tier
-                    break
-
             return JurisUser(
                 user_id=str(user_id),
                 email=str(payload.get("email", "")),
                 display_name=str(payload.get("name", "")),
                 team_id=payload.get("team_id"),
-                subscription=subscription,
+                subscription=SubscriptionTier.FREE,
                 is_verified=True,
                 metadata={
                     "auth_time": payload.get("auth_time"),
@@ -157,7 +149,7 @@ class DevTokenVerifier(TokenVerifier):
     Supported token formats:
       - 'dev-placeholder' or 'dev:default' -> default dev user
       - 'dev:<user_id>' -> dev user with specified user_id
-      - 'dev:<user_id>:<tier>' -> dev user with specified user_id and subscription tier
+    - 'dev:<user_id>:<tier>' -> legacy syntax; tier is ignored
     """
 
     async def verify_token(self, token: str) -> JurisUser:
@@ -177,7 +169,7 @@ class DevTokenVerifier(TokenVerifier):
                 user_id="dev-user-001",
                 email="dev@lawyersediary.local",
                 display_name="Dev Advocate",
-                subscription=SubscriptionTier.SOLO,
+                subscription=SubscriptionTier.FREE,
                 is_verified=False,  # Dev tokens are never cryptographically verified
                 metadata={"token_type": "dev"},
             )
@@ -185,19 +177,11 @@ class DevTokenVerifier(TokenVerifier):
         if clean_token.startswith("dev:"):
             parts = clean_token.split(":")
             user_id = parts[1] if len(parts) > 1 and parts[1] else "dev-user"
-            raw_tier = parts[2].lower() if len(parts) > 2 else "solo"
-
-            subscription = SubscriptionTier.SOLO
-            for tier in SubscriptionTier:
-                if tier.value == raw_tier:
-                    subscription = tier
-                    break
-
             return JurisUser(
                 user_id=user_id,
                 email=f"{user_id}@lawyersediary.local",
                 display_name=f"Dev Advocate ({user_id})",
-                subscription=subscription,
+                subscription=SubscriptionTier.FREE,
                 is_verified=False,
                 metadata={"token_type": "dev", "custom_id": user_id},
             )
